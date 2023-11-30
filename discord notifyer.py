@@ -7,6 +7,7 @@ import asyncio
 import base64
 import datetime
 import random
+
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
@@ -17,6 +18,7 @@ REPO_OWNER = 'godotengine'
 REPO_NAME = 'godot'
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
+SPOTIFY_USER_TOKEN = os.getenv('SPOTIFY_USER_TOKEN')
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -91,12 +93,14 @@ def get_spotify_token():
 
 
 def get_followed_artists(token):
-    headers = {
-        'Authorization': f'Bearer {token}',
-    }
-
+    headers = {'Authorization': f'Bearer {token}'}
     response = requests.get('https://api.spotify.com/v1/me/following?type=artist', headers=headers)
-    return [item['id'] for item in response.json()['artists']['items']]
+    response_data = response.json()
+    if 'artists' in response_data:
+        return [item['id'] for item in response_data['artists']['items']]
+    else:
+        print('Error getting followed artists:', response_data)
+        return []
 
 
 def check_new_releases(token, artist_ids):
@@ -109,7 +113,8 @@ def check_new_releases(token, artist_ids):
         response = requests.get(f'https://api.spotify.com/v1/artists/{artist_id}/albums', headers=headers)
         albums = response.json()['items']
         for album in albums:
-            release_date = datetime.datetime.strptime(album['release_date'], '%Y-%m-%d').date()
+            date_format = '%Y-%m-%d' if len(album['release_date']) > 4 else '%Y'
+            release_date = datetime.datetime.strptime(album['release_date'], date_format).date()
             if release_date == datetime.date.today():
                 new_releases.append((album['name'], album['artists'][0]['name']))
 
@@ -129,9 +134,7 @@ async def check_all_videos(channel_ids):
     for channel_id in channel_ids:
         try:
             response = requests.get(f'https://www.googleapis.com/youtube/v3/search?key={API_KEY}&channelId={channel_id}&part=id&order=date&maxResults=3')
-            await user.send(f'response: {response}')
             data = json.loads(response.text)
-            await user.send(f'data: {data}')
             if 'items' in data and data['items']:
                 for item in data['items']:
                     video_id = item['id']['videoId']
@@ -140,6 +143,17 @@ async def check_all_videos(channel_ids):
             await user.send(f'Error while checking videos for channel {channel_id}: {e}')
 
     return all_videos
+
+
+def get_artist_top_tracks(token, artist_id):
+    headers = {'Authorization': f'Bearer {token}'}
+    response = requests.get(f'https://api.spotify.com/v1/artists/{artist_id}/top-tracks?country=US', headers=headers)
+    response_data = response.json()
+    if 'tracks' in response_data:
+        return [track['name'] for track in response_data['tracks']]
+    else:
+        print('Error getting artist top tracks:', response_data)
+        return []
 
 
 async def background_check_updates():
@@ -157,7 +171,7 @@ async def background_check_updates():
             await user.send(f'There is a version of Godot!!!!!!!!\n\n\n\n\n\nNEW VERSION OF GODOT ALERT!!!')
         
         spotify_token = get_spotify_token()
-        followed_artists = get_followed_artists(spotify_token)
+        followed_artists = get_followed_artists(SPOTIFY_USER_TOKEN)
         new_releases = check_new_releases(spotify_token, followed_artists)
         for new_release in new_releases:
             album_name, artist_name = new_release
@@ -173,7 +187,7 @@ async def on_ready():
     print(f'{client.user} is connected to Discord!')
     user = await client.fetch_user('314618583923818496')
     await user.send('Discord notifyer up!')
-
+    
     await user.send('Testing YouTube')
     # Get a random video from a channel
     all_videos = await check_all_videos(channel_ids)
@@ -192,18 +206,29 @@ async def on_ready():
     await user.send('Got all branches')
     branch = random.choice(all_branches)
     await user.send(f'Test message: Random branch from Godot: {branch}')
-
+    
     await user.send('Testing Spotify')
     # Get a random song from an artist you follow
     spotify_token = get_spotify_token()
     await user.send('Got spotify token')
-    followed_artists = get_followed_artists(spotify_token)
+    followed_artists = get_followed_artists(SPOTIFY_USER_TOKEN)
     await user.send('Got followed artists')
-    new_releases = check_new_releases(spotify_token, followed_artists)
-    await user.send('Got new releases')
-    if new_releases:
-        album_name, artist_name = random.choice(new_releases)
-        await user.send(f'Test message: Random new release from {artist_name}: {album_name}')
+    random_artist = random.choice(followed_artists)
+    await user.send('Got random artist')
+    artist_top_tracks = get_artist_top_tracks(spotify_token, random_artist)
+    await user.send('Got artist top tracks')
+
+    while not artist_top_tracks and followed_artists:
+        followed_artists.remove(random_artist)
+        if followed_artists:
+            random_artist = random.choice(followed_artists)
+            artist_top_tracks = get_artist_top_tracks(spotify_token, random_artist)
+
+    if artist_top_tracks:
+        random_track = random.choice(artist_top_tracks)
+        await user.send(f'Test message: Random track from a followed artist: {random_track}')
+    else:
+        await user.send('No top tracks found for any followed artists')
 
     client.loop.create_task(background_check_updates())
 
